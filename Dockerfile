@@ -1,4 +1,4 @@
-FROM python:3.8-alpine
+FROM 716577323141.dkr.ecr.us-east-1.amazonaws.com/python:latest
 
 WORKDIR /app
 
