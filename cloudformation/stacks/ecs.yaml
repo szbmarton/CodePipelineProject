@@ -1,0 +1,80 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: CloudFormation template for ECS Fargate task.
+
+Parameters:
+  DockerImage:
+    Description: The image to use in the task definition
+    Type: String
+  DockerTag:
+    Description: The image tag to use in the task definition
+    Type: String
+    Default: latest
+  ClusterName:
+    Description: ECS control plane name
+    Type: String
+
+Resources:  
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+      
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['/', [/ecs, !Ref Cluster]]
+      RetentionInDays: 14
+      
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: rds-connection-task
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 0.5GB
+      ExecutionRoleArn: !Ref ExecutionRole
+      ContainerDefinitions:
+        - Name: rds-python
+          Image: !Sub "${DockerImage}:${DockerTag}"
+          Secrets:
+            - Name: HOST
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudformation/rds/host"
+            - Name: DB
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudformation/rds/database"
+            - Name: PASSWD
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudformation/rds/password"
+            - Name: USER
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudformation/rds/user"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: fargate
+              
+  # A role needed by ECS
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: RDS-connection-task-role
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: SSM-read-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Allow ssm access
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudformation/rds/*"
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'

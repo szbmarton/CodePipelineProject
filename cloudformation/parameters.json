@@ -1,0 +1,14 @@
+[
+  {
+    "ParameterKey": "RepositoryName",
+    "ParameterValue": "postgres-python"
+  }, 
+  {
+    "ParameterKey": "BucketName",
+    "ParameterValue": "my-codepipeline-website-test"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-628c541f"
+  }
+]

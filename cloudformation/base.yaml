@@ -1,0 +1,141 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: My Cloudformation stack
+
+Parameters:    
+  RepositoryName:
+    Description: Name of the ERC repository
+    Type: String
+
+  BucketName:
+    Description: Name for the bucket storing the static website.
+    Type: String
+
+  VpcId:
+    Description: The default VPC ID in the current region
+    Type: String
+    
+  SSMPassword:
+    Description: Secret storing the DB master user password
+    Type: String
+    Default: /cloudformation/rds/password:1
+    
+  MasterUser:
+    Description: Database master user
+    Type: String
+    Default: postgres
+    
+  DBName:
+    Description: Database name
+    Type: String
+    Default: PSQL
+
+Resources:
+  MyRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+            {
+              "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Only keep latest 3 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 3
+                },
+                "action": { "type": "expire" }
+              }]
+            }
+        RegistryId: !Ref "AWS::AccountId"
+      RepositoryName: !Ref RepositoryName
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+    DeletionPolicy: Retain
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref S3Bucket
+                - /*
+      Bucket: !Ref S3Bucket
+  
+  CodePipeline: 
+    Type: AWS::CloudFormation::Stack
+    Properties: 
+      TemplateURL: stacks/codepipeline.yaml
+      Parameters: 
+        OutputS3BucketName: !Ref BucketName
+        ECRRepo: !Ref RepositoryName
+        
+  RDSSubnets: 
+    Type: AWS::CloudFormation::Stack
+    Properties: 
+      TemplateURL: stacks/vpc.yaml
+      Parameters: 
+        VpcId: !Ref VpcId
+        
+  DBSubnetGroup: 
+    Type: AWS::RDS::DBSubnetGroup
+    Properties: 
+      DBSubnetGroupDescription: RDS subnet group
+      DBSubnetGroupName: RDS-postgres-subnet-group
+      SubnetIds:
+        !Split [ "," , !GetAtt RDSSubnets.Outputs.PrivateSubnets ]
+        
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: !Ref DBName
+      Engine: postgres
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      MasterUsername: !Ref MasterUser
+      DBInstanceClass: db.t2.micro
+      AllocatedStorage: 20
+      MasterUserPassword: !Sub '{{resolve:ssm-secure:${SSMPassword}}}'
+      VPCSecurityGroups:
+        - !GetAtt RDSSubnets.Outputs.DBEC2SecurityGroupId
+        
+  ECSTask: 
+    Type: AWS::CloudFormation::Stack
+    Properties: 
+      TemplateURL: stacks/ecs.yaml
+      Parameters: 
+        DockerImage: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryName}"
+        DockerTag: latest
+        ClusterName: codepipeline-fargate-cluster
+  
+Outputs:    
+  RepositoryArn:
+    Value: !GetAtt MyRepository.Arn
+  WebsiteURL:
+    Value: !GetAtt S3Bucket.WebsiteURL
+    Description: URL for website hosted on S3   
+  S3BucketSecureURL:
+    Value: !Join 
+      - ''
+      - - 'https://'
+        - !GetAtt S3Bucket.DomainName
+    Description: Name of S3 bucket to hold website content
+  RDSEndpointAddress:
+    Value: !GetAtt DBInstance.Endpoint.Address
+  RDSEndpointPort:
+    Value: !GetAtt DBInstance.Endpoint.Port
